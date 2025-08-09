@@ -1,0 +1,56 @@
+version: 1
+defaults:
+  timeout: 30000
+  format: parquet
+  output_dir: donnees
+
+tasks:
+  - name: binance_btc_1m_jan2024
+    mode: rest
+    exchange: binance
+    type_marche: spot
+    symbole: BTC/USDT
+    timeframe: 1m
+    date_debut: 2024-01-01
+    date_fin: 2024-02-01
+    format: parquet
+    sortie: donnees/binance_btcusdt_1m_202401.parquet
+
+  - name: okx_btc_swap_mark_1m_10min
+    mode: stream
+    stream: ohlcv
+    exchange: okx
+    type_marche: swap
+    sous_type: linear
+    symbole: BTC/USDT:USDT
+    timeframe: 1m
+    prix_ohlcv: mark
+    duree: 600
+    format: sqlite
+    sqlite_table: ohlcv_1m
+    sortie: donnees/okx_stream_ohlcv_1m.sqlite
+
+  - name: bybit_btc_trades_to_ohlcv
+    mode: stream
+    stream: trades
+    exchange: bybit
+    type_marche: future
+    sous_type: inverse
+    symbole: BTC/USD:BTC
+    timeframe: 1m
+    trades_vers_ohlcv: true
+    flush: 50
+    format: csv
+    sortie: donnees/bybit_btc_trades_ohlcv.csv
+
+  - name: okx_multi_ohlcv
+    mode: stream
+    stream: ohlcv
+    exchange: okx
+    type_marche: swap
+    sous_type: linear
+    symbols: [BTC/USDT:USDT, ETH/USDT:USDT]
+    timeframe: 1m
+    duree: 300
+    format: parquet
+    sortie: donnees/okx_multi_ohlcv.parquet
