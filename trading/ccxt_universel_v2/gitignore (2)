@@ -1,0 +1,8 @@
+# Ignorer seulement les sorties de ce sous-dossier ccxt
+donnees/
+*.csv
+*.parquet
+*.feather
+*.sqlite
+*.db
+*.log
