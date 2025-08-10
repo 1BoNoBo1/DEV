@@ -26,13 +26,14 @@ ENV/
 # Node (si présent)
 node_modules/
 
-# Données / sorties volumineuses
+# données ccxt (ne pas versionner)
 donnees/
 *.csv
 *.parquet
 *.feather
 *.sqlite
 *.db
+*.log
 
 # Logs / artefacts
 *.log
