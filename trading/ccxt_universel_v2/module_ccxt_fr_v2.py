@@ -25,11 +25,11 @@ import argparse
 import asyncio
 import json
 import logging
-import math
 import random
 import sqlite3
 import sys
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -83,7 +83,11 @@ def _ensure_utc(dt: datetime) -> datetime:
 def _parse_date_utc(txt: Optional[str]) -> Optional[datetime]:
     if not txt:
         return None
-    dt = datetime.fromisoformat(txt)
+    t = txt.strip()
+    # Accepte suffixe 'Z' (UTC) pour Python 3.9+
+    if t.endswith("Z"):
+        t = t[:-1] + "+00:00"
+    dt = datetime.fromisoformat(t)
     return _ensure_utc(dt.astimezone(timezone.utc) if dt.tzinfo else dt)
 
 def _timeframe_delta(timeframe: str) -> timedelta:
@@ -104,6 +108,12 @@ def _atomic_write_csv(df: pd.DataFrame, out: Path) -> None:
     df.to_csv(tmp, index=False)
     tmp.replace(out)
     LOGGER.info("✅ Sauvegardé : %s", out)
+
+def _append_csv(df: pd.DataFrame, out: Path) -> None:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    exists = out.exists()
+    df.to_csv(out, index=False, mode="a", header=not exists)
+    LOGGER.info("✅ Append CSV : %s (+%d lignes)", out, len(df))
 
 def _concat_dedup(df_list: List[pd.DataFrame], subset: Iterable[str] = ("timestamp",)) -> pd.DataFrame:
     if not df_list:
@@ -151,6 +161,7 @@ class ParametresSortie:
 
 def _ecrire_parquet(df: pd.DataFrame, out: Path) -> None:
     try:
+        out.parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(out, index=False)
         LOGGER.info("✅ Sauvegardé (parquet) : %s", out)
     except Exception as e:
@@ -158,6 +169,7 @@ def _ecrire_parquet(df: pd.DataFrame, out: Path) -> None:
 
 def _ecrire_feather(df: pd.DataFrame, out: Path) -> None:
     try:
+        out.parent.mkdir(parents=True, exist_ok=True)
         df.to_feather(out)
         LOGGER.info("✅ Sauvegardé (feather) : %s", out)
     except Exception as e:
@@ -179,6 +191,12 @@ def _ecrire_sqlite(df: pd.DataFrame, out: Path, table: str, unique_cols: Tuple[s
             else:
                 col_defs.append(f"{c} TEXT")
         cur.execute(f"CREATE TABLE IF NOT EXISTS {table} ({', '.join(col_defs)})")
+
+        # Vérification des colonnes pour l'index unique
+        missing = [c for c in unique_cols if c not in cols]
+        if missing:
+            raise ValueError(f"Colonnes manquantes pour l'index unique sur table '{table}': {missing}. "
+                             f"Colonnes disponibles: {cols}. Adaptez 'unique_par' ou le schéma/table.")
 
         # Index unique
         unique_clause = ", ".join(unique_cols)
@@ -213,6 +231,32 @@ def ecrire_dataframe(df: pd.DataFrame, sortie: ParametresSortie) -> None:
         _ecrire_parquet(df, out)
     elif fmt == "feather":
         _ecrire_feather(df, out)
+    elif fmt == "sqlite":
+        _ecrire_sqlite(df, out, sortie.table, sortie.unique_par)
+    else:
+        raise ValueError(f"Format inconnu : {fmt}")
+
+def ecrire_dataframe_stream(df: pd.DataFrame, sortie: ParametresSortie) -> None:
+    """
+    Écriture adaptée au streaming pour éviter l'écrasement du fichier:
+    - CSV: append
+    - Parquet/Feather: création de fichiers 'part' tournants
+    - SQLite: UPSERT (identique)
+    """
+    if sortie.chemin is None:
+        raise ValueError("ParametresSortie.chemin est requis")
+    fmt = sortie.format
+    out = sortie.chemin
+    if fmt == "csv":
+        _append_csv(df, out)
+    elif fmt in ("parquet", "feather"):
+        # Fichier tournant pour conserver l'historique sans append complexe
+        part = out.with_name(f"{out.stem}.part-{_utc_now_str()}{out.suffix}")
+        if fmt == "parquet":
+            _ecrire_parquet(df, part)
+        else:
+            _ecrire_feather(df, part)
+        LOGGER.warning("Streaming %s: écrit en fichiers tournants (%s). Envisagez SQLite pour un upsert continu.", fmt, part.name)
     elif fmt == "sqlite":
         _ecrire_sqlite(df, out, sortie.table, sortie.unique_par)
     else:
@@ -561,6 +605,14 @@ class GestionnaireEchangeCCXTPro:
 
         self.exchange = cls(args)
         self.preset = _get_preset(cfg.id_exchange)
+        self.cfg = cfg
+
+        # Sandbox si demandé
+        if cfg.sandbox and hasattr(self.exchange, "set_sandbox_mode"):
+            try:
+                self.exchange.set_sandbox_mode(True)
+            except Exception as e:
+                LOGGER.warning("Sandbox pro non supporté (%s): %s", cfg.id_exchange, e)
 
         # Options marché
         opts = self.exchange.options if hasattr(self.exchange, "options") else {}
@@ -573,10 +625,18 @@ class GestionnaireEchangeCCXTPro:
     async def _run_loop(self, fetch_fn, handle_fn, p: ParametresFlux, met: CompteurMetriques):
         debut = time.time()
         essais = 0
+        loaded_markets = False
         while True:
             if p.duree_max_s and (time.time() - debut) >= p.duree_max_s: break
             try:
                 async with self.exchange as ex:
+                    # Charger les marchés une fois (certaines bourses l'exigent)
+                    if not loaded_markets:
+                        try:
+                            await ex.load_markets()
+                        except Exception as e:
+                            LOGGER.warning("load_markets (pro) optionnel/échoué: %s", e)
+                        loaded_markets = True
                     while True:
                         if p.duree_max_s and (time.time() - debut) >= p.duree_max_s: return
                         data = await fetch_fn(ex)
@@ -621,23 +681,54 @@ class GestionnaireEchangeCCXTPro:
             dernier_ts_ms = int(df["timestamp"].iloc[-1].timestamp()*1000)
             tampon.append(df)
             if p.sortie and sum(len(x) for x in tampon) >= p.flush_toutes_n:
-                ecrire_dataframe(_concat_dedup(tampon, subset=("timestamp","symbole","timeframe")), p.sortie)
+                ecrire_dataframe_stream(_concat_dedup(tampon, subset=("timestamp","symbole","timeframe")), p.sortie)
                 tampon = []
 
         async def fetch(ex): return await ex.watch_ohlcv(p.symbole, p.timeframe, None, None, params_ws())
         await self._run_loop(fetch, handle, p, met)
         if p.sortie and tampon:
-            ecrire_dataframe(_concat_dedup(tampon, subset=("timestamp","symbole","timeframe")), p.sortie)
+            ecrire_dataframe_stream(_concat_dedup(tampon, subset=("timestamp","symbole","timeframe")), p.sortie)
 
     async def flux_trades(self, p: ParametresFlux):
         met = CompteurMetriques()
         tampon_trades: List[Dict[str, Any]] = []
         agreg = AgregateurTradesOHLCV(p.timeframe, p.symbole, exclure_bougie_courante=p.exclure_bougie_courante) if p.mode_trades_vers_ohlcv else None
 
+        # Déduplication des trades (borne mémoire)
+        seen_keys: set[str] = set()
+        seen_order: deque[str] = deque(maxlen=50000)
+        def _trade_key(t: Dict[str, Any]) -> str:
+            tid = t.get("id")
+            if tid is not None:
+                return f"{p.symbole}:{tid}"
+            return f"{p.symbole}:{t.get('timestamp')}:{t.get('side')}:{t.get('price')}:{t.get('amount')}"
+
+        def _mark_seen(keys: List[str]) -> List[bool]:
+            results = []
+            for k in keys:
+                if k in seen_keys:
+                    results.append(True)
+                else:
+                    seen_keys.add(k)
+                    seen_order.append(k)
+                    results.append(False)
+                    # purge si dépasse capacité
+                    if len(seen_keys) > seen_order.maxlen:
+                        old = seen_order.popleft()
+                        seen_keys.discard(old)
+            return results
+
         async def handle(trades):
             nonlocal tampon_trades
             if isinstance(trades, dict):
                 trades = [trades]
+            # Dédup brute
+            keys = [_trade_key(t) for t in trades]
+            is_dup = _mark_seen(keys)
+            trades = [t for t, d in zip(trades, is_dup) if not d]
+            if not trades:
+                return
+
             # Normalisation + stockage
             norm = []
             for t in trades:
@@ -649,23 +740,24 @@ class GestionnaireEchangeCCXTPro:
                     "id": t.get("id"),
                     "symbole": p.symbole,
                 })
+
             if p.mode_trades_vers_ohlcv and agreg is not None:
                 df_closed, _ = agreg.ingester_trades(trades)
                 if df_closed is not None and not df_closed.empty:
                     if p.sortie:
-                        ecrire_dataframe(df_closed, p.sortie)
+                        ecrire_dataframe_stream(df_closed, p.sortie)
             elif p.sortie:
                 tampon_trades.extend(norm)
                 if len(tampon_trades) >= p.flush_toutes_n:
                     df = pd.DataFrame(tampon_trades)
-                    ecrire_dataframe(df, p.sortie)
+                    ecrire_dataframe_stream(df, p.sortie)
                     tampon_trades = []
 
         async def fetch(ex): return await ex.watch_trades(p.symbole, None, None, p.params_additionnels)
         await self._run_loop(fetch, handle, p, met)
         if p.sortie and tampon_trades:
             df = pd.DataFrame(tampon_trades)
-            ecrire_dataframe(df, p.sortie)
+            ecrire_dataframe_stream(df, p.sortie)
 
     async def flux_orderbook(self, p: ParametresFlux):
         met = CompteurMetriques()
@@ -686,7 +778,7 @@ class GestionnaireEchangeCCXTPro:
 
     async def flux_multisymboles(self, p: ParametresFlux):
         """
-        Utilise watch_*_for_symbols si dispo, sinon crée un Task par symbole.
+        Utilise watch_*_for_symbols si dispo, sinon crée un Task par symbole (instance exchange séparée).
         """
         if not p.symboles:
             raise ValueError("symboles non fournis pour flux multisymboles.")
@@ -707,6 +799,8 @@ class GestionnaireEchangeCCXTPro:
             agreg_map: Dict[str, AgregateurTradesOHLCV] = {}
             pas = _timeframe_delta(p.timeframe) if p.type_flux == "ohlcv" else None
             dernier_ts_ms: Dict[str, int] = {}
+            # Dédup trades par symbole
+            seen_map: Dict[str, Tuple[set, deque]] = {}
 
             def params_ws():
                 return p.params_additionnels or {}
@@ -726,18 +820,52 @@ class GestionnaireEchangeCCXTPro:
                         df["symbole"] = symb
                         df["timeframe"] = p.timeframe
                         dernier_ts_ms[symb] = int(df["timestamp"].iloc[-1].timestamp()*1000)
-                        if p.sortie: ecrire_dataframe(df, p.sortie)
+                        if p.sortie: ecrire_dataframe_stream(df, p.sortie)
 
                     elif p.type_flux == "trades":
+                        # Initialiser structures de dédup
+                        if symb not in seen_map:
+                            seen_map[symb] = (set(), deque(maxlen=50000))
+                        seen_keys, seen_order = seen_map[symb]
+
+                        def _key(t):
+                            tid = t.get("id")
+                            if tid is not None:
+                                return f"{symb}:{tid}"
+                            return f"{symb}:{t.get('timestamp')}:{t.get('side')}:{t.get('price')}:{t.get('amount')}"
+
+                        def _mark_seen(keys: List[str]) -> List[bool]:
+                            results = []
+                            for k in keys:
+                                if k in seen_keys:
+                                    results.append(True)
+                                else:
+                                    seen_keys.add(k)
+                                    seen_order.append(k)
+                                    results.append(False)
+                                    if len(seen_keys) > seen_order.maxlen:
+                                        old = seen_order.popleft()
+                                        seen_keys.discard(old)
+                            return results
+
+                        # Normalisation / agrégation
+                        if isinstance(payload, dict):
+                            payload = [payload]
+
+                        keys = [_key(t) for t in payload]
+                        is_dup = _mark_seen(keys)
+                        payload = [t for t, d in zip(payload, is_dup) if not d]
+                        if not payload:
+                            continue
+
                         if p.mode_trades_vers_ohlcv:
                             agr = agreg_map.get(symb) or AgregateurTradesOHLCV(p.timeframe, symb, p.exclure_bougie_courante)
                             agreg_map[symb] = agr
-                            df_closed, _ = agr.ingester_trades(payload if isinstance(payload, list) else [payload])
+                            df_closed, _ = agr.ingester_trades(payload)
                             if p.sortie and df_closed is not None and not df_closed.empty:
-                                ecrire_dataframe(df_closed, p.sortie)
+                                ecrire_dataframe_stream(df_closed, p.sortie)
                         else:
                             norm = []
-                            if isinstance(payload, dict): payload = [payload]
                             for t in payload:
                                 norm.append({
                                     "timestamp": datetime.fromtimestamp(t["timestamp"]/1000, tz=timezone.utc),
@@ -748,9 +876,12 @@ class GestionnaireEchangeCCXTPro:
                                     "symbole": symb,
                                 })
                             if p.sortie and norm:
-                                ecrire_dataframe(pd.DataFrame(norm), p.sortie)
+                                ecrire_dataframe_stream(pd.DataFrame(norm), p.sortie)
                     elif p.type_flux == "ticker":
-                        LOGGER.info("ticker %s: %s", symb, payload.get("last") if isinstance(payload, dict) else payload)
+                        if isinstance(payload, dict):
+                            LOGGER.info("ticker %s: %s", symb, payload.get("last"))
+                        else:
+                            LOGGER.info("ticker %s: %s", symb, payload)
                     elif p.type_flux == "orderbook":
                         if isinstance(payload, dict):
                             bid = payload["bids"][0][0] if payload.get("bids") else None
@@ -770,17 +901,19 @@ class GestionnaireEchangeCCXTPro:
 
             await self._run_loop(fetch, handle, p, met)
         else:
-            # Pas de méthode groupée → tâches parallèles
+            # Pas de méthode groupée → tâches parallèles avec instances ccxt.pro séparées
             async def run_one(symb: str):
                 sous_p = ParametresFlux(**{**p.__dict__, "symbole": symb, "symboles": None})
+                # Créer une instance dédiée pour éviter les conflits de contexte
+                pro_i = GestionnaireEchangeCCXTPro(self.cfg)
                 if p.type_flux == "ohlcv":
-                    await self.flux_ohlcv(sous_p)
+                    await pro_i.flux_ohlcv(sous_p)
                 elif p.type_flux == "trades":
-                    await self.flux_trades(sous_p)
+                    await pro_i.flux_trades(sous_p)
                 elif p.type_flux == "ticker":
-                    await self.flux_ticker(sous_p)
+                    await pro_i.flux_ticker(sous_p)
                 elif p.type_flux == "orderbook":
-                    await self.flux_orderbook(sous_p)
+                    await pro_i.flux_orderbook(sous_p)
 
             await asyncio.gather(*(run_one(s) for s in p.symboles))
 
