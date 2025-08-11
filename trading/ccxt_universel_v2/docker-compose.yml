@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  ccxt_universel:
+    build: .
+    container_name: ccxt_universel_v2
+    environment:
+      - TZ=Europe/Paris
+    # Monte le dossier de sorties et le YAML (lecture seule)
+    volumes:
+      - ./donnees:/app/donnees
+      - ./ccxt_batch.yaml:/app/ccxt_batch.yaml:ro
+    # Par défaut : exécute toutes les tâches du YAML
+    command: ["python", "runner_ccxt_batch.py", "--yaml", "ccxt_batch.yaml"]
+    # Exemple pour n'exécuter que certaines tâches :
+    # command: ["python", "runner_ccxt_batch.py", "--yaml", "ccxt_batch.yaml", "--taches", "binance_btc_1m_jan2024,okx_multi_ohlcv"]
+    restart: unless-stopped
