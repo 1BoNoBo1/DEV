@@ -2,11 +2,15 @@
 ccxt>=4.3.0
 pandas>=2.2.0
 PyYAML>=6.0.1
+cryptography>=43.0.0  # requis par ccxt (signatures). Version avec roues Py3.13
 
-# ---- WebSockets (ccxt.pro inside ccxt) ----
-aiohttp>=3.9.0
-websockets>=12.0
+# ---- WebSockets (ccxt.pro inclus dans ccxt) ----
+aiohttp>=3.10.0; python_version >= "3.13"
+aiohttp>=3.9.0;  python_version <  "3.13"
+websockets>=13.0; python_version >= "3.13"
+websockets>=12.0; python_version <  "3.13"
 
-# ---- Optional: columnar formats ----
-pyarrow>=14.0.0        # Parquet/Feather (recommandé)
-fastparquet>=2023.10.1 # Alternative Parquet (optionnel)
+# ---- Optionnel: formats colonnes ----
+pyarrow>=16.0.0; python_version >= "3.13"   # Parquet/Feather (recommandé)
+pyarrow>=14.0.0; python_version <  "3.13"
+fastparquet>=2023.10.1  # Alternative Parquet (optionnel)

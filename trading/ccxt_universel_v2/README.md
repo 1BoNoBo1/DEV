@@ -1,6 +1,7 @@
 # CCXT — Base universelle (FR) REST + WebSockets
 
 Ce dossier contient une **implémentation universelle** autour de `ccxt` et `ccxt.pro` pour :
+
 - **REST** : téléchargement d’**OHLCV** robustes (bornes strictes, reprise idempotente, déduplication, exclusion bougie courante),
 - **WebSockets (ccxt.pro)** : `watch_ohlcv`, `watch_trades`, `watch_order_book`, `watch_ticker` avec **reconnexion/backoff + jitter**, déduplication,
 - **Sorties pluggables** : `CSV` (atomique), `Parquet/Feather` (si `pyarrow`/`fastparquet`), `SQLite` (UPSERT + index unique),
@@ -15,32 +16,28 @@ Ce dossier contient une **implémentation universelle** autour de `ccxt` et `ccx
 - `requirements.txt` : dépendances Python.
 
 ---
-## INSTALLATION avec venv: 
 
-1. Créez un environnement virtuel :
-   ```bash
-   python -m venv venv
-   ```
+## Installation complète (Ubuntu neuf)
 
-2. Activez l'environnement virtuel :
-   - Sur Windows :
-     ```bash
-     venv\Scripts\activate
-     ```
-   - Sur macOS/Linux :
-     ```bash
-     source venv/bin/activate
-     ```
+Cette commande installe Python 3, SQLite, crée un environnement virtuel dédié, met à jour l’outillage Python et installe uniquement les dépendances manquantes de ccxt_universel_v2.
+Elle est idempotente : si tout est déjà installé, rien n’est modifié.
 
-3. Installez les dépendances :
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+sudo apt update \
+ && sudo apt install -y build-essential libffi-dev python3-dev rustc cargo python3 python3-venv python3-pip sqlite3 libsqlite3-dev \
+ && python3 -m venv .venv \
+ && source .venv/bin/activate \
+ && pip install -U pip setuptools wheel \
+ && pip install --no-deps --ignore-installed -r requirements.txt
+```
 
+📌 Notes
+
+Cette commande doit être exécutée depuis ce dossier (ccxt_universel_v2).
 
 ## Pourquoi cette mise en œuvre ?
 
-- **Universalité** : fonctionne avec *tous* les exchanges supportés par `ccxt`, en tenant compte de leurs **particularités** (`limit` par page, `until`/`endTime`/`to` en ms/s, `price=mark/index/last`, modes `spot/swap/future/margin`, `linear/inverse`, etc.).
+- **Universalité** : fonctionne avec _tous_ les exchanges supportés par `ccxt`, en tenant compte de leurs **particularités** (`limit` par page, `until`/`endTime`/`to` en ms/s, `price=mark/index/last`, modes `spot/swap/future/margin`, `linear/inverse`, etc.).
 - **Robustesse** : retries + backoff exponentiel, **écriture atomique**, **idempotence** (reprise), **déduplication** fiable, **exclusion des bougies incomplètes**.
 - **Performance** : formats colonne (`Parquet/Feather`), **SQLite** avec UPSERT et index unique, multi-symboles (moins de connexions WS).
 - **Opérationnel** : CLI/runner prêts à l’emploi, logs clairs, configuration simple par YAML.
@@ -50,16 +47,19 @@ Ce dossier contient une **implémentation universelle** autour de `ccxt` et `ccx
 ## Utilisation directe (CLI)
 
 ### REST (OHLCV)
+
 ```bash
 python module_ccxt_fr_v2.py --exchange binance --symbole BTC/USDT --timeframe 1m   --date-debut 2024-01-01 --date-fin 2024-02-01 --format parquet
 ```
 
 ### WebSocket — OHLCV en temps réel
+
 ```bash
 python module_ccxt_fr_v2.py --exchange okx --type-marche swap --sous-type linear   --symbole BTC/USDT:USDT --timeframe 1m --stream ohlcv --duree 600   --format sqlite --sqlite-table ohlcv_1m
 ```
 
 ### WebSocket — TRADES → OHLCV (latence minimale)
+
 ```bash
 python module_ccxt_fr_v2.py --exchange bybit --type-marche future --sous-type inverse   --symbole BTC/USD:BTC --timeframe 1m --stream trades --trades-vers-ohlcv   --sortie donnees/bybit_btc_1m_ohlcv.csv --flush 50
 ```
@@ -151,12 +151,14 @@ tasks:
 **Pourquoi** : orchestrer **automatiquement** une liste de tâches depuis un YAML, sans répéter la CLI. Idéal pour **cron**, **tmux**, **CI/CD**.
 
 **Ce qu’il fait** :
+
 1. Charge le YAML, fusionne `defaults` → chaque `task`,
 2. Construit les paramètres d’exchange (avec options marché et credentials si fournis via env),
 3. Exécute **REST** (téléchargement OHLCV) **ou STREAM** (WebSockets), mono ou multi-symboles,
 4. Gère la sortie (formats, UPSERT SQLite, dédup), log les métriques et erreurs, renvoie un **code global**.
 
 **Utilisation** :
+
 ```bash
 pip install -r requirements.txt
 python runner_ccxt_batch.py --yaml ccxt_batch.yaml

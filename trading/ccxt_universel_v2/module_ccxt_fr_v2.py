@@ -359,6 +359,30 @@ class CompteurMetriques:
 
 @dataclass
 class ParametresEchange:
+    """
+    Paramètres de connexion à un exchange CCXT.
+
+    Attributes
+    ----------
+    id_exchange : str
+        Identifiant de l'exchange (par ex. "binance", "okx", etc.).
+    gerer_rate_limit : bool
+        Active la gestion automatique du rate limit par ccxt.
+    timeout_ms : int
+        Délai d'expiration des requêtes en millisecondes.
+    sandbox : bool
+        Active le mode sandbox pour les tests si l'exchange le supporte.
+    api_key, secret, password, uid : Optional[str]
+        Informations d'authentification API.
+    options : Dict[str, Any]
+        Dictionnaire d'options supplémentaires transmis à l'instance CCXT.
+    type_marche : str
+        Type de marché par défaut ("spot", "swap", "future", etc.).
+    sous_type : Optional[str]
+        Sous‑type du marché ("linear", "inverse", etc.).
+    mode_marge : Optional[str]
+        Mode de marge ("isolated", "cross"), si pris en charge.
+    """
     id_exchange: str = "binance"
     gerer_rate_limit: bool = True
     timeout_ms: int = 30000
@@ -374,6 +398,35 @@ class ParametresEchange:
 
 @dataclass
 class ParametresOHLCV:
+    """
+    Paramètres pour une requête historique OHLCV.
+
+    Attributes
+    ----------
+    symbole : str
+        Symbole de trading à interroger (par ex. "BTC/USDT").
+    timeframe : str
+        Période des bougies (15s, 1m, 1h, 1d, etc.).
+    date_debut, date_fin : Optional[str]
+        Fenêtre temporelle en notation ISO 8601 (UTC). `date_fin` est exclusive.
+    limite_par_requete : Optional[int]
+        Nombre maximal d'éléments à récupérer par appel (utile pour réduire la charge).
+    prix_ohlcv : Optional[str]
+        Type de prix à utiliser lorsqu'il est supporté ("mark", "index", "last").
+    exclure_bougie_courante : bool
+        Élimine la bougie en cours pour éviter d'inclure des données incomplètes.
+    strict_bornes : bool
+        Si vrai, applique un bornage strict côté client.
+    reessais : int
+        Nombre de tentatives en cas d’erreur réseau (backoff exponentiel).
+    backoff_initial_s : float
+        Durée initiale du backoff exponentiel en secondes.
+    sortie : Optional[ParametresSortie]
+        Configuration de sortie (CSV/Parquet/SQLite).
+    params_additionnels : Dict[str, Any]
+        Paramètres supplémentaires à transmettre à ccxt.
+    """
+
     symbole: str
     timeframe: str = "1m"
     date_debut: Optional[str] = None
@@ -399,7 +452,7 @@ class ParametresFlux:
     duree_max_s: Optional[int] = None
     max_messages: Optional[int] = None
     backoff_initial_s: float = 0.6
-    reessais: int = 1000000
+    reessais: int = 100                   # Nombre maximum de tentatives en cas d’erreur réseau. La valeur par défaut
     # persistance
     sortie: Optional[ParametresSortie] = None
     flush_toutes_n: int = 20
