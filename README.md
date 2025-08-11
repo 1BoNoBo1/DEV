@@ -5,22 +5,22 @@ des **conventions claires** (noms FR, scripts prêts à l'emploi, idempotence) e
 
 ## 🔖 Catégories de code
 
-| Dossier racine             | Contenu principal                                                                 |
-|----------------------------|-----------------------------------------------------------------------------------|
-| `trading/`                 | Données de marché, bots, connecteurs d'exchanges, backtests, indicateurs         |
-| `osint/`                   | Scripts et pipelines OSINT, scrapers anonymes, ponts TOR, intégrations           |
-| `devops/`                  | IaC, Docker, CI/CD, monitoring, infra RunPod/VPS                                 |
-| `datascience/`             | Feature engineering, modèles (ML/DL), notebooks                                   |
-| `securite/`                | Outils de sécurité, durcissement système, audit, post-install                    |
-| `scripts/`                 | Outils CLI, utilitaires transverses (backup, maintenance, batch)                 |
-| `docs/`                    | Documents, schémas d’archi, cahiers de tests, notes                              |
+| Dossier racine | Contenu principal                                                        |
+| -------------- | ------------------------------------------------------------------------ |
+| `trading/`     | Données de marché, bots, connecteurs d'exchanges, backtests, indicateurs |
+| `osint/`       | Scripts et pipelines OSINT, scrapers anonymes, ponts TOR, intégrations   |
+| `devops/`      | IaC, Docker, CI/CD, monitoring, infra RunPod/VPS                         |
+| `datascience/` | Feature engineering, modèles (ML/DL), notebooks                          |
+| `securite/`    | Outils de sécurité, durcissement système, audit, post-install            |
+| `scripts/`     | Outils CLI, utilitaires transverses (backup, maintenance, batch)         |
+| `docs/`        | Documents, schémas d’archi, cahiers de tests, notes                      |
 
 > Chaque sous-projet vit dans son **dossier dédié**, contient un `README.md` local, un `requirements.txt` (si Python)
 > et des scripts **prêts à l’emploi** (bash/python) avec gestion des erreurs.
 
 ## 📁 Arborescence actuelle (extrait)
 
-```
+```bash
 DEV/
 ├── trading/
 │   └── ccxt_universel_v2/
@@ -29,6 +29,12 @@ DEV/
 │       ├── ccxt_batch.yaml
 │       ├── runner_ccxt_batch.py
 │       └── requirements.txt
+│       └── Dockerfile
+│       └── docker-compose.yml
+│       └── entrypoint.sh
+│       └── .gitignore
+│       └── README.md
+│       └── .env.example
 ├── docs/
 ├── osint/
 ├── devops/
@@ -51,32 +57,17 @@ DEV/
 - Commits : `type(scope): message` — ex. `feat(trading): module ccxt v2 parquet/sqlite`.
 - Tests/CI (optionnel) : PyTest + mypy + ruff/flake8 ; pre-commit recommandé.
 
-## 🔌 Projet inclus : *ccxt_universel_v2* (REST + WebSockets)
+## 🔌 Projet inclus : _ccxt_universel_v2_ (REST + WebSockets)
 
-Sous-dossier : `trading/ccxt_universel_v2`
+Un projet CCXT complet pour interagir avec les exchanges de crypto-monnaies, incluant :
 
-- `module_ccxt_fr_v2.py` : base universelle CCXT/CCXT Pro, sorties CSV/Parquet/Feather/SQLite, **trades→OHLCV**, multisymboles.
-- `ccxt_batch.yaml` : batch d’exemples (REST/stream).
-- `runner_ccxt_batch.py` : exécute le YAML (sélection de tâches possible).
-- `requirements.txt` : dépendances.
+- Une interface unifiée pour accéder aux données de marché et exécuter des ordres sur plusieurs exchanges.
+- Des fonctionnalités avancées telles que la gestion des ordres, le suivi des positions et l'analyse des performances.
+- Un support pour les WebSockets afin de recevoir des mises à jour en temps réel.
 
 ### Installation rapide
 
-```bash
-cd trading/ccxt_universel_v2
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-```
-
 ### Exemples
-
-```bash
-# REST → Parquet
-python module_ccxt_fr_v2.py --exchange binance --symbole BTC/USDT --timeframe 1m   --date-debut 2024-01-01 --date-fin 2024-02-01 --format parquet
-
-# Stream trades → OHLCV
-python module_ccxt_fr_v2.py --exchange bybit --type-marche future --sous-type inverse   --symbole BTC/USD:BTC --timeframe 1m --stream trades --trades-vers-ohlcv   --sortie donnees/bybit_btc_1m_ohlcv.csv --flush 50
-```
 
 ## 🔐 Secrets & sécurité
 
