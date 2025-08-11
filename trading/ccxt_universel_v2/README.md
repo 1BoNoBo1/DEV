@@ -15,6 +15,28 @@ Ce dossier contient une **implémentation universelle** autour de `ccxt` et `ccx
 - `requirements.txt` : dépendances Python.
 
 ---
+## INSTALLATION avec venv: 
+
+1. Créez un environnement virtuel :
+   ```bash
+   python -m venv venv
+   ```
+
+2. Activez l'environnement virtuel :
+   - Sur Windows :
+     ```bash
+     venv\Scripts\activate
+     ```
+   - Sur macOS/Linux :
+     ```bash
+     source venv/bin/activate
+     ```
+
+3. Installez les dépendances :
+   ```bash
+   pip install -r requirements.txt
+   ```
+
 
 ## Pourquoi cette mise en œuvre ?
 
