@@ -31,7 +31,7 @@ import sys
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Literal
 
@@ -80,15 +80,22 @@ def _utc_now_str() -> str:
 def _ensure_utc(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
-def _parse_date_utc(txt: Optional[str]) -> Optional[datetime]:
-    if not txt:
+def _parse_date_utc(txt):
+    if txt is None:
         return None
-    t = txt.strip()
-    # Accepte suffixe 'Z' (UTC) pour Python 3.9+
-    if t.endswith("Z"):
-        t = t[:-1] + "+00:00"
-    dt = datetime.fromisoformat(t)
-    return _ensure_utc(dt.astimezone(timezone.utc) if dt.tzinfo else dt)
+    if isinstance(txt, datetime):
+        return txt.astimezone(timezone.utc) if txt.tzinfo else txt.replace(tzinfo=timezone.utc)
+    if isinstance(txt, date):
+        dt = datetime.combine(txt, datetime.min.time()).replace(tzinfo=timezone.utc)
+        return dt
+    if isinstance(txt, str):
+        t = txt.strip()
+        if t.endswith("Z"):
+            t = t[:-1] + "+00:00"
+        dt = datetime.fromisoformat(t)
+        return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    raise TypeError(f"type non géré pour date: {type(txt)}")
+
 
 def _timeframe_delta(timeframe: str) -> timedelta:
     tf = timeframe.strip()
