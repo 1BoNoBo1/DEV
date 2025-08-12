@@ -25,7 +25,7 @@ tasks:
     symbole: BTC/USDT:USDT
     timeframe: 1m
     prix_ohlcv: mark
-    duree: 600
+    duree: 150
     format: sqlite
     sqlite_table: ohlcv_1m
     sortie: donnees/okx_stream_ohlcv_1m.sqlite
