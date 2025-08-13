@@ -1,17 +1,29 @@
-# Données locales / artefacts
-donnees/
-*.sqlite
-*.sqlite-wal
-*.parquet
-*.csv
+# === Dossier de données ===
+donnees/*
+!donnees/.gitkeep
 
-# Environnements / caches
+# === Environnements virtuels ===
 .venv/
+venv/
+ENV/
+
+# === Python ===
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
+*.egg-info/
+*.egg
+
+# === Logs et fichiers temporaires ===
 *.log
+*.tmp
+*.swp
+*.swo
+
+# === Fichiers de configuration locaux ===
+.env
+.env.local
 
 # Outils / IDE
 .vscode/
@@ -19,7 +31,10 @@ __pycache__/
 *.swp
 .DS_Store
 
-# Docker
-*.local.yml
-# Autoriser le placeholder du dossier donnees
-!donnees/.gitkeep
+# === Artefacts Docker ===
+*.pid
+.docker/
+
+# === Autres caches ===
+.cache/
+
