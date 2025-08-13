@@ -1,0 +1,12 @@
+version: 1
+tasks:
+  - name: binance_btc_1m_jan2024_parquet_zstd
+    mode: rest
+    exchange: binance
+    symbole: BTC/USDT
+    timeframe: 1m
+    date_debut: "2024-01-01"
+    date_fin:   "2024-02-01"
+    format: parquet
+    compression: zstd
+    sortie: donnees/binance_btcusdt_1m_202401_zstd.parquet

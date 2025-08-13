@@ -1,0 +1,13 @@
+version: 1
+tasks:
+  - name: binance_eth_5m_one_day
+    mode: rest
+    exchange: binance
+    type_marche: spot
+    symbole: ETH/USDT
+    timeframe: 5m
+    date_debut: "2024-02-01"
+    date_fin:   "2024-02-02"
+    format: parquet
+    compression: zstd
+    sortie: donnees/binance_ethusdt_5m_20240201.parquet

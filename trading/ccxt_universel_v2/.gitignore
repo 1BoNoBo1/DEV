@@ -1,8 +1,25 @@
-# Ignorer seulement les sorties de ce sous-dossier ccxt
+# Données locales / artefacts
 donnees/
-*.csv
-*.parquet
-*.feather
 *.sqlite
-*.db
+*.sqlite-wal
+*.parquet
+*.csv
+
+# Environnements / caches
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 *.log
+
+# Outils / IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Docker
+*.local.yml
+# Autoriser le placeholder du dossier donnees
+!donnees/.gitkeep

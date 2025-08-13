@@ -1,0 +1,18 @@
+version: 1
+tasks:
+  - name: okx_multi_ohlcv_sqlite_5m
+    mode: stream
+    stream: ohlcv
+    exchange: okx
+    type_marche: swap
+    sous_type: linear
+    symboles:
+      - BTC/USDT:USDT
+      - ETH/USDT:USDT
+    timeframe: 1m
+    duree: 300
+    prix_ohlcv: mark
+    exclure_bougie_courante: true
+    format: sqlite
+    sqlite_table: ohlcv_1m
+    sortie: donnees/okx_multi_ohlcv_prod.sqlite

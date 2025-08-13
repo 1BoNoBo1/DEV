@@ -29,6 +29,7 @@ import random
 import sqlite3
 import sys
 import time
+import os
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta, timezone
@@ -48,12 +49,20 @@ except Exception:
 
 # ----------------------------- Journalisation -----------------------------
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
+class UTCFormatter(logging.Formatter):
+    # force l'horloge du formatter en UTC
+    converter = time.gmtime
+
+# logger du module (pas le root)
 LOGGER = logging.getLogger("module_ccxt_fr_v2")
+LOGGER.setLevel(logging.INFO)
+LOGGER.handlers.clear()          # évite les doublons si le module est importé plusieurs fois
+LOGGER.propagate = False
+
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(UTCFormatter("%(asctime)sZ - %(levelname)s - %(message)s"))
+LOGGER.addHandler(handler)
+
 
 # ------------------------------ Stockage ----------------------------------
 
@@ -89,6 +98,7 @@ def _validate_multi_stream_params(p):
     if getattr(p, "format", None) == "sqlite" and not getattr(p, "sqlite_table", None):
         # table par défaut dérivée du timeframe (ohlcv_1m, ohlcv_5m, ...)
         p.sqlite_table = f"ohlcv_{p.timeframe}"
+
 
 # ------------------------------- Helpers ----------------------------------
 

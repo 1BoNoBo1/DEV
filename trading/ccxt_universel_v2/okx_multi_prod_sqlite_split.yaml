@@ -1,0 +1,31 @@
+version: 1
+tasks:
+  - name: okx_btc_sqlite_live
+    mode: stream
+    stream: ohlcv
+    exchange: okx
+    type_marche: swap
+    sous_type: linear
+    symbole: BTC/USDT:USDT
+    timeframe: 1m
+    duree: 0              # 0 = tourne en continu
+    prix_ohlcv: mark
+    exclure_bougie_courante: true
+    format: sqlite
+    sqlite_table: ohlcv_1m
+    sortie: donnees/okx_live.sqlite
+
+  - name: okx_eth_sqlite_live
+    mode: stream
+    stream: ohlcv
+    exchange: okx
+    type_marche: swap
+    sous_type: linear
+    symbole: ETH/USDT:USDT
+    timeframe: 1m
+    duree: 0
+    prix_ohlcv: mark
+    exclure_bougie_courante: true
+    format: sqlite
+    sqlite_table: ohlcv_1m
+    sortie: donnees/okx_live.sqlite

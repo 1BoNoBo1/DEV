@@ -1,0 +1,13 @@
+version: 1
+tasks:
+  - name: kraken_btc_5m_one_day
+    mode: rest
+    exchange: kraken
+    type_marche: spot
+    symbole: BTC/USD
+    timeframe: 5m
+    date_debut: "2024-02-01"
+    date_fin:   "2024-02-02"
+    format: parquet
+    compression: zstd
+    sortie: donnees/kraken_btcusd_5m_20240201.parquet

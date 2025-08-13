@@ -1,0 +1,13 @@
+version: 1
+tasks:
+  - name: rest_generic_test
+    mode: rest
+    exchange: binance        # ex: binance | kraken | coinbase | bybit
+    type_marche: spot        # spot | swap (si perp)
+    symbole: ETH/USDT        # ex: XBT/USD sur Kraken
+    timeframe: 5m            # ex: 1m, 5m, 1h...
+    date_debut: "2024-02-01"
+    date_fin:   "2024-02-02"
+    format: parquet
+    compression: zstd
+    sortie: donnees/rest_generic.parquet

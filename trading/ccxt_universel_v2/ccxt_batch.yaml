@@ -52,5 +52,9 @@ tasks:
     symbols: [BTC/USDT:USDT, ETH/USDT:USDT]
     timeframe: 1m
     duree: 300
-    format: parquet
-    sortie: donnees/okx_multi_ohlcv.parquet
+    format: sqlite
+    sqlite_table: ohlcv_1m
+    sortie: donnees/okx_multi_ohlcv.sqlite
+    prix_ohlcv: mark
+    exclure_bougie_courante: true
+    

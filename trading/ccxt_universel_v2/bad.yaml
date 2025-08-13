@@ -1,0 +1,4 @@
+version: 1
+tasks:
+  - {name: badsym, mode: stream, stream: ohlcv, exchange: okx, type_marche: swap,
+     symbole: FOOBAR/USDT:USDT, timeframe: 1m, duree: 60, format: sqlite, sqlite_table: ohlcv_1m, sortie: donnees/bad.sqlite}
