@@ -71,6 +71,24 @@ EXCHANGE_PRESETS: Dict[str, Dict[str, Any]] = {
     "gateio":  {"ohlcv_limit_max": 1000, "until_param": "to", "until_in_seconds": True, "price_param": None, "supports_margin_mode": True},
     "*":       {"ohlcv_limit_max": 1000, "until_param": None, "price_param": None, "supports_margin_mode": False},
 }
+# ======= VALIDATIONS MULTI =======
+def _validate_multi_stream_params(p):
+    """
+    Sécurise les champs critiques pour le flux multi avant d'entrer dans la boucle.
+    Évite notamment les None qui déclenchent un '.endswith' sur la sortie.
+    """
+    # timeframe obligatoire
+    if getattr(p, "timeframe", None) in (None, ""):
+        raise ValueError("timeframe requis pour le flux multi (ex: '1m', '5m').")
+
+    # sortie obligatoire (chemin de fichier ou base sqlite)
+    if getattr(p, "sortie", None) in (None, ""):
+        raise ValueError("paramètre 'sortie' requis pour le flux multi (ex: 'donnees/xxx.parquet' ou 'donnees/xxx.sqlite').")
+
+    # si SQLite, s'assurer d'une table (défaut explicite)
+    if getattr(p, "format", None) == "sqlite" and not getattr(p, "sqlite_table", None):
+        # table par défaut dérivée du timeframe (ohlcv_1m, ohlcv_5m, ...)
+        p.sqlite_table = f"ohlcv_{p.timeframe}"
 
 # ------------------------------- Helpers ----------------------------------
 
@@ -836,12 +854,17 @@ class GestionnaireEchangeCCXTPro:
 
     # ---------------------- Multi-symboles (si supporté) -------------------
 
+    # ---------------------- Multi-symboles (si supporté) -------------------
+
     async def flux_multisymboles(self, p: ParametresFlux):
         """
         Utilise watch_*_for_symbols si dispo, sinon crée un Task par symbole (instance exchange séparée).
+        Fallback auto si la signature groupée est incompatible (TypeError).
         """
         if not p.symboles:
             raise ValueError("symboles non fournis pour flux multisymboles.")
+        # validation des champs critiques pour éviter les None (ex: sortie=None)
+        _validate_multi_stream_params(p)
         met = CompteurMetriques()
 
         # Détermine la méthode groupée si présente
@@ -854,19 +877,35 @@ class GestionnaireEchangeCCXTPro:
         grouped_fn = method_map.get(p.type_flux)
         has_group = hasattr(self.exchange, grouped_fn) if grouped_fn else False
 
+        # Définition du runner "split" réutilisable (fallback)
+        async def run_one(symb: str):
+            sous_p = ParametresFlux(**{**p.__dict__, "symbole": symb, "symboles": None})
+            pro_i = GestionnaireEchangeCCXTPro(self.cfg)
+            if p.type_flux == "ohlcv":
+                await pro_i.flux_ohlcv(sous_p)
+            elif p.type_flux == "trades":
+                await pro_i.flux_trades(sous_p)
+            elif p.type_flux == "ticker":
+                await pro_i.flux_ticker(sous_p)
+            elif p.type_flux == "orderbook":
+                await pro_i.flux_orderbook(sous_p)
+
+        async def fallback_split():
+            LOGGER.warning("ccxt.pro: %s indisponible/incompatible → fallback split (%d symboles).",
+                           grouped_fn or "grouped_fn", len(p.symboles))
+            await asyncio.gather(*(run_one(s) for s in p.symboles))
+
         if has_group:
             # Gestion groupée (un seul fetch, handler distribue)
             agreg_map: Dict[str, AgregateurTradesOHLCV] = {}
             pas = _timeframe_delta(p.timeframe) if p.type_flux == "ohlcv" else None
             dernier_ts_ms: Dict[str, int] = {}
-            # Dédup trades par symbole
             seen_map: Dict[str, Tuple[set, deque]] = {}
 
             def params_ws():
                 return p.params_additionnels or {}
 
             async def handle(batch_map):
-                # batch_map: dict symbole -> payload
                 for symb, payload in batch_map.items():
                     if p.type_flux == "ohlcv":
                         df = pd.DataFrame(payload, columns=["timestamp","open","high","low","close","volume"])
@@ -876,14 +915,15 @@ class GestionnaireEchangeCCXTPro:
                         last = dernier_ts_ms.get(symb)
                         if last is not None and not df.empty:
                             df = df[(df["timestamp"].astype("int64") // 10**6) > last]
-                        if df.empty: continue
+                        if df.empty: 
+                            continue
                         df["symbole"] = symb
                         df["timeframe"] = p.timeframe
                         dernier_ts_ms[symb] = int(df["timestamp"].iloc[-1].timestamp()*1000)
-                        if p.sortie: ecrire_dataframe_stream(df, p.sortie)
+                        if p.sortie: 
+                            ecrire_dataframe_stream(df, p.sortie)
 
                     elif p.type_flux == "trades":
-                        # Initialiser structures de dédup
                         if symb not in seen_map:
                             seen_map[symb] = (set(), deque(maxlen=50000))
                         seen_keys, seen_order = seen_map[symb]
@@ -908,7 +948,6 @@ class GestionnaireEchangeCCXTPro:
                                         seen_keys.discard(old)
                             return results
 
-                        # Normalisation / agrégation
                         if isinstance(payload, dict):
                             payload = [payload]
 
@@ -937,11 +976,13 @@ class GestionnaireEchangeCCXTPro:
                                 })
                             if p.sortie and norm:
                                 ecrire_dataframe_stream(pd.DataFrame(norm), p.sortie)
+
                     elif p.type_flux == "ticker":
                         if isinstance(payload, dict):
                             LOGGER.info("ticker %s: %s", symb, payload.get("last"))
                         else:
                             LOGGER.info("ticker %s: %s", symb, payload)
+
                     elif p.type_flux == "orderbook":
                         if isinstance(payload, dict):
                             bid = payload["bids"][0][0] if payload.get("bids") else None
@@ -958,23 +999,21 @@ class GestionnaireEchangeCCXTPro:
                     return await method(p.symboles, p.profondeur, params_ws())
                 elif p.type_flux == "ticker":
                     return await method(p.symboles, params_ws())
-
-            await self._run_loop(fetch, handle, p, met)
+            # ↓↓↓ Fallback automatique si la signature est incompatible ↓↓↓
+            try:
+                # Essai du flux groupé (ccxt.pro)
+                await self._run_loop(fetch, handle, p, met)
+            except TypeError as e:
+                LOGGER.warning("ccxt.pro: TypeError dans le flux groupé (%s) → fallback split.", e)
+                await fallback_split()
+            except AttributeError as e:
+                LOGGER.warning("ccxt.pro: AttributeError dans le flux groupé (%s) → fallback split.", e)
+                await fallback_split()
+            except Exception as e:
+                LOGGER.warning("ccxt.pro: erreur groupé (%s) → fallback split.", e)
+                await fallback_split()
         else:
-            # Pas de méthode groupée → tâches parallèles avec instances ccxt.pro séparées
-            async def run_one(symb: str):
-                sous_p = ParametresFlux(**{**p.__dict__, "symbole": symb, "symboles": None})
-                # Créer une instance dédiée pour éviter les conflits de contexte
-                pro_i = GestionnaireEchangeCCXTPro(self.cfg)
-                if p.type_flux == "ohlcv":
-                    await pro_i.flux_ohlcv(sous_p)
-                elif p.type_flux == "trades":
-                    await pro_i.flux_trades(sous_p)
-                elif p.type_flux == "ticker":
-                    await pro_i.flux_ticker(sous_p)
-                elif p.type_flux == "orderbook":
-                    await pro_i.flux_orderbook(sous_p)
-
+            # Pas de méthode groupée → tâches parallèles (split)
             await asyncio.gather(*(run_one(s) for s in p.symboles))
 
 # ---------------------------------- CLI -----------------------------------

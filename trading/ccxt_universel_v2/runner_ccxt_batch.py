@@ -22,6 +22,45 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# ---------- Normalisation sortie/format (multi & single) ----------
+from pathlib import Path
+
+def _normalize_sortie_format(task: dict) -> None:
+    fmt = task.get("format")
+    out = task.get("sortie")
+
+    # Déduire le format depuis l’extension si fmt manquant et out est une string
+    if not fmt and isinstance(out, str):
+        s = out.lower()
+        if s.endswith(".sqlite"):
+            fmt = "sqlite"
+        elif s.endswith(".parquet"):
+            fmt = "parquet"
+        elif s.endswith(".feather"):
+            fmt = "feather"
+        elif s.endswith(".csv"):
+            fmt = "csv"
+
+    # Valeurs par défaut si sortie absente (évite .endswith(None))
+    if not out:
+        name = (task.get("name") or "sortie").replace(" ", "_")
+        ext = {
+            "sqlite": ".sqlite",
+            "parquet": ".parquet",
+            "feather": ".feather",
+            "csv": ".csv",
+        }.get(fmt or "csv", ".csv")
+        out = f"donnees/{name}{ext}"
+
+    # Table par défaut pour SQLite si absente
+    if (fmt or "").lower() == "sqlite" and not task.get("sqlite_table"):
+        tf = task.get("timeframe") or "1m"
+        task["sqlite_table"] = f"ohlcv_{tf}"
+
+    # Normalisation finale
+    task["format"] = (fmt or "csv").lower()
+    task["sortie"] = out
+
 # Import YAML (PyYAML requis)
 try:
     import yaml
@@ -105,6 +144,7 @@ def construire_sortie(d: Dict[str, Any], stream: bool) -> mod.ParametresSortie:
 
 def executer_tache_rest(d: Dict[str, Any]) -> None:
     """Exécute une tâche REST OHLCV."""
+    _normalize_sortie_format(d)
     cfg = construire_cfg_echange(d)
     gest = mod.GestionnaireEchangeCCXT(cfg)
     sortie = construire_sortie(d, stream=False)
@@ -127,14 +167,15 @@ def executer_tache_rest(d: Dict[str, Any]) -> None:
 
 async def _executer_tache_stream_async(d: Dict[str, Any]) -> None:
     """Exécute une tâche stream (async)."""
+    _normalize_sortie_format(d)
     cfg = construire_cfg_echange(d)
     pro = mod.GestionnaireEchangeCCXTPro(cfg)
     sortie = construire_sortie(d, stream=True)
     params_add = d.get("params", {}) or {}
-
-    symboles = d.get("symbols")
+    symboles = d.get("symboles") or d.get("symbols")
     if isinstance(symboles, str):
-        symboles = [s.strip() for s in symboles.split(",")]
+        symboles = [s.strip() for s in symboles.split(",") if s.strip()]
+
     pf = mod.ParametresFlux(
         type_flux=d["stream"],
         symbole=d.get("symbole") or (symboles[0] if symboles else None),
@@ -150,8 +191,10 @@ async def _executer_tache_stream_async(d: Dict[str, Any]) -> None:
         intervalle_metrics_s=int(d.get("metrics_interval", 60)),
         mode_trades_vers_ohlcv=bool(d.get("trades_vers_ohlcv", False)),
     )
+    
+    symb_log = ",".join(symboles) if symboles else (d.get("symbole") or "?")
+    LOGGER.info("→ STREAM %s %s %s", cfg.id_exchange, pf.type_flux, symb_log)
 
-    LOGGER.info("→ STREAM %s %s %s", cfg.id_exchange, pf.type_flux, pf.symbole or pf.symboles)
     if pf.symboles:
         await pro.flux_multisymboles(pf)
     else:
