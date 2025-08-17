@@ -26,16 +26,26 @@ ENV/
 # Node (si présent)
 node_modules/
 
-# données ccxt (ne pas versionner)
+# Données locales / artefacts
 donnees/
-*.csv
-*.parquet
-*.feather
 *.sqlite
-*.db
+*.sqlite-wal
+*.parquet
+*.csv
+
+# Environnements / caches
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 *.log
 
-# Logs / artefacts
-*.log
-dist/
-build/
+# Outils / IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Docker
+*.local.yml
