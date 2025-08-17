@@ -426,7 +426,3 @@ docker compose down --remove-orphans
 - [x] **Zéro doublon** sur reprise
 - [x] **Log rotation** + **restart**
 - [x] **Pin** des versions (si `requirements.lock.txt` adopté)
-
----
-
-Besoin d’un **Makefile** (cibles `build`, `up`, `logs`, `vacuum`, `export-parquet`…) ou d’ajouter un **sidecar export Parquet** (dernières 24h toutes les 60s) ? Je te le prépare sur demande, prêt à coller.
