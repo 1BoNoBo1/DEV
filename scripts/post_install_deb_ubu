@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+# ===============================================================
+# Script : postinstall_serveur.sh
+# Objet  : Post-installation et durcissement de base (Debian/Ubuntu)
+# Version: 2025-08-18
+# Auteur : 1BoNoBo1
+#
+# Caractéristiques :
+#  - Idempotent (réexécutable sans casser la config)
+#  - Journalisation /var/log/postinstall_serveur.log
+#  - Options activables/désactivables par flags
+#  - Sécurisation SSH (sans vous enfermer si aucune clé n’est trouvée)
+#  - UFW + Fail2ban
+#  - Mises à jour automatiques (unattended-upgrades)
+#  - NTP via systemd-timesyncd
+#  - Profil sysctl réseau (rp_filter, syncookies, redirects…)
+#
+# Usage rapide (tout activer) :
+#   sudo bash postinstall_serveur.sh --tout
+#
+# Sélection fine :
+#   sudo bash postinstall_serveur.sh \
+#     --maj --ntp --ssh --ufw --fail2ban --sysctl
+#
+# Séchage (afficher sans exécuter) :
+#   sudo bash postinstall_serveur.sh --tout --dry-run
+# ===============================================================
+
+set -Eeuo pipefail
+
+# ---------- Paramètres ----------
+LOGFILE="/var/log/postinstall_serveur.log"
+DRY_RUN=0
+DO_MAJ=0
+DO_NTP=0
+DO_SSH=0
+DO_UFW=0
+DO_FAIL2BAN=0
+DO_SYSCTL=0
+
+# --tout active tout
+if [[ "${1:-}" == "--tout" ]] || [[ " $* " == *" --tout "* ]]; then
+  DO_MAJ=1; DO_NTP=1; DO_SSH=1; DO_UFW=1; DO_FAIL2BAN=1; DO_SYSCTL=1
+fi
+
+# Flags individuels
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=1 ;;
+    --maj) DO_MAJ=1 ;;
+    --ntp) DO_NTP=1 ;;
+    --ssh) DO_SSH=1 ;;
+    --ufw) DO_UFW=1 ;;
+    --fail2ban) DO_FAIL2BAN=1 ;;
+    --sysctl) DO_SYSCTL=1 ;;
+    --help|-h)
+      grep '^# ' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+    ;;
+  esac
+done
+
+# ---------- Utilitaires ----------
+journaliser() { echo -e "$*" | tee -a "$LOGFILE" ; }
+
+verifier_root() {
+  if [[ $EUID -ne 0 ]]; then
+    echo "❌ Ce script doit être exécuté en root (sudo)." >&2
+    exit 1
+  fi
+}
+
+capturer_erreurs() {
+  journaliser "❌ Erreur à la ligne $1. Abandon."
+}
+trap 'capturer_erreurs $LINENO' ERR
+
+exec_cmd() {
+  local cmd="$*"
+  if [[ $DRY_RUN -eq 1 ]]; then
+    journaliser "DRY-RUN ➜ $cmd"
+  else
+    journaliser "⏳ $cmd"
+    eval "$cmd"
+  fi
+}
+
+sauvegarder_fichier() {
+  local f="$1"
+  if [[ -f "$f" ]]; then
+    local ts; ts="$(date +%Y%m%d-%H%M%S)"
+    exec_cmd "cp -a '$f' '${f}.bak_${ts}'"
+  fi
+}
+
+remplacer_ou_ajouter() {
+  # $1=fichier, $2=regex clé (ancré), $3=ligne complète souhaitée
+  local f="$1" key="$2" line="$3"
+  if [[ ! -f "$f" ]]; then
+    exec_cmd "install -m 0644 /dev/null '$f'"
+  fi
+  if grep -Eq "$key" "$f"; then
+    exec_cmd "sed -ri 's|^($key).*|$line|' '$f'"
+  else
+    exec_cmd "printf '%s\n' '$line' >> '$f'"
+  fi
+}
+
+detecter_os() {
+  # Remplit : OS_ID, OS_VER, OS_CODENAME
+  . /etc/os-release
+  OS_ID="$ID"
+  OS_VER="$VERSION_ID"
+  OS_CODENAME="${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}"
+  journaliser "🖥️  OS détecté : ${OS_ID} ${OS_VER} (${OS_CODENAME})"
+}
+
+port_ssh_actuel() {
+  # Tente d'extraire le port effectif
+  local p
+  p="$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}')"
+  [[ -z "$p" ]] && p="$(awk '/^[[:space:]]*Port[[:space:]]/{print $2}' /etc/ssh/sshd_config 2>/dev/null | tail -n1)"
+  [[ -z "$p" ]] && p="22"
+  echo "$p"
+}
+
+cles_ssh_presentes() {
+  # Retourne 0 (vrai) si au moins un authorized_keys non vide trouvé
+  local found=1
+  while IFS=: read -r user _ uid _ home _; do
+    [[ "$uid" -ge 1000 || "$user" == "root" ]] || continue
+    if [[ -f "$home/.ssh/authorized_keys" ]] && [[ -s "$home/.ssh/authorized_keys" ]]; then
+      found=0; break
+    fi
+  done < /etc/passwd
+  return $found
+}
+
+# ---------- Étapes ----------
+installer_paquets() {
+  journaliser "📦 Installation des paquets de base…"
+  export DEBIAN_FRONTEND=noninteractive
+  exec_cmd "apt-get update -y"
+  exec_cmd "apt-get -yq upgrade"
+  exec_cmd "apt-get -yq install --no-install-recommends \
+    ca-certificates curl wget vim nano git jq htop needrestart \
+    systemd-timesyncd ufw fail2ban unattended-upgrades apt-listchanges"
+}
+
+configurer_ntp() {
+  journaliser "🕒 Activation de la synchro temps (systemd-timesyncd)…"
+  exec_cmd "systemctl enable systemd-timesyncd.service"
+  exec_cmd "systemctl restart systemd-timesyncd.service"
+  exec_cmd "timedatectl set-ntp true"
+}
+
+configurer_unattended() {
+  journaliser "🔁 Configuration des mises à jour automatiques (unattended-upgrades)…"
+  # Active l’exécution quotidienne
+  local f="/etc/apt/apt.conf.d/20auto-upgrades"
+  sauvegarder_fichier "$f"
+  exec_cmd "cat > '$f' <<'EOF'
+APT::Periodic::Update-Package-Lists \"1\";
+APT::Periodic::Download-Upgradeable-Packages \"1\";
+APT::Periodic::Unattended-Upgrade \"1\";
+APT::Periodic::AutocleanInterval \"7\";
+EOF"
+  # Assure le service actif
+  exec_cmd "systemctl enable unattended-upgrades.service"
+  exec_cmd "systemctl restart unattended-upgrades.service"
+}
+
+configurer_ssh() {
+  journaliser "🔐 Durcissement SSH…"
+  local f="/etc/ssh/sshd_config"
+  sauvegarder_fichier "$f"
+
+  # Paramètres sûrs par défaut (restent compatibles)
+  remplace() { remplacer_ou_ajouter "$f" "^$1" "$1 $2"; }
+
+  remplace "Protocol" "2"
+  remplace "UsePAM" "yes"
+  remplace "PubkeyAuthentication" "yes"
+  remplace "X11Forwarding" "no"
+  remplace "MaxAuthTries" "3"
+  remplace "LoginGraceTime" "30"
+  remplace "ClientAliveInterval" "300"
+  remplace "ClientAliveCountMax" "2"
+  remplace "AllowAgentForwarding" "no"
+  remplace "AllowTcpForwarding" "no"
+
+  # Root en clé uniquement (prohibit-password) — sauf si vous préférez "no"
+  remplace "PermitRootLogin" "prohibit-password"
+
+  # Désactiver l’authentification par mot de passe uniquement si des clés existent
+  if cles_ssh_presentes; then
+    remplace "PasswordAuthentication" "no"
+    journaliser "🔑 Clés détectées ➜ PasswordAuthentication désactivé."
+  else
+    remplace "PasswordAuthentication" "yes"
+    journaliser "⚠️ Aucune clé trouvée ➜ PasswordAuthentication laissé à yes pour éviter un lockout."
+  fi
+
+  # Validation config, puis reload
+  exec_cmd "sshd -t"
+  exec_cmd "systemctl restart ssh || systemctl restart sshd"
+}
+
+configurer_ufw() {
+  journaliser "🛡️  Pare-feu UFW…"
+  local p; p="$(port_ssh_actuel)"
+  exec_cmd "ufw --force reset"
+  exec_cmd "ufw default deny incoming"
+  exec_cmd "ufw default allow outgoing"
+  exec_cmd "ufw limit ${p}/tcp"
+  exec_cmd "ufw --force enable"
+  exec_cmd "ufw status verbose"
+}
+
+configurer_fail2ban() {
+  journaliser "🚫 Fail2ban (jail.sshd)…"
+  local jf="/etc/fail2ban/jail.local"
+  sauvegarder_fichier "$jf"
+  local ssh_port; ssh_port="$(port_ssh_actuel)"
+  exec_cmd "cat > '$jf' <<EOF
+[DEFAULT]
+backend = systemd
+
+[sshd]
+enabled  = true
+port     = $ssh_port
+filter   = sshd
+maxretry = 5
+findtime = 10m
+bantime  = 1h
+# Si UFW est actif, Fail2ban utilisera automatiquement l'action UFW via le paquet (Ubuntu/Debian).
+EOF"
+  exec_cmd "systemctl enable fail2ban"
+  exec_cmd "systemctl restart fail2ban"
+  exec_cmd "fail2ban-client status sshd || true"
+}
+
+configurer_sysctl() {
+  journaliser "🌐 Profil sysctl réseau…"
+  local f="/etc/sysctl.d/99-securite-reseau.conf"
+  sauvegarder_fichier "$f"
+  exec_cmd "cat > '$f' <<'EOF'
+# Activer SYN cookies (mitigation SYN flood)
+net.ipv4.tcp_syncookies = 1
+
+# Reverse-path filtering strict (2) – aide contre l'usurpation IP
+net.ipv4.conf.all.rp_filter = 2
+net.ipv4.conf.default.rp_filter = 2
+
+# Interdire source routing
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+
+# Refuser les redirects ICMP (sécurité)
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.secure_redirects = 0
+net.ipv4.conf.default.secure_redirects = 0
+
+# Ne pas émettre de redirects
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+
+# Journaliser les paquets suspects
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.conf.default.log_martians = 1
+
+# IPv6 : désactiver acceptation redirects et RA côté serveur
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+net.ipv6.conf.all.accept_ra = 0
+net.ipv6.conf.default.accept_ra = 0
+EOF"
+  exec_cmd "sysctl --system"
+}
+
+# ---------- Main ----------
+main() {
+  verifier_root
+  touch "$LOGFILE" || { echo "Impossible d'écrire $LOGFILE"; exit 1; }
+  detecter_os
+
+  # Paquets de base si on touche à quelque chose
+  if (( DO_MAJ || DO_NTP || DO_SSH || DO_UFW || DO_FAIL2BAN || DO_SYSCTL )); then
+    installer_paquets
+  fi
+  (( DO_MAJ ))      && configurer_unattended
+  (( DO_NTP ))      && configurer_ntp
+  (( DO_SSH ))      && configurer_ssh
+  (( DO_UFW ))      && configurer_ufw
+  (( DO_FAIL2BAN )) && configurer_fail2ban
+  (( DO_SYSCTL ))   && configurer_sysctl
+
+  journaliser "✅ Terminé."
+}
+
+main "$@"
